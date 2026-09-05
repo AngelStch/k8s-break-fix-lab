@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: orders-api
+  namespace: lab
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [orders.lab.local]
+      secretName: orders-tls
+  rules:
+    - host: orders.lab.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: orders-api
+                port:
+                  name: http

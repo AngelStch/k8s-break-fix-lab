@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: lab
+  labels:
+    app: orders-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: orders-api
+  template:
+    metadata:
+      labels:
+        app: orders-api
+    spec:
+      volumes:
+        - name: src
+          configMap:
+            name: orders-api-src
+        - name: node-modules
+          emptyDir: {}
+      # Installs dependencies at pod start so no image build or registry is needed.
+      initContainers:
+        - name: install-deps
+          image: node:22-alpine
+          workingDir: /work
+          command: ["sh", "-c", "cp /src/package.json . && npm install --omit=dev --no-audit --no-fund && cp -r node_modules /deps/"]
+          volumeMounts:
+            - { name: src, mountPath: /src }
+            - { name: node-modules, mountPath: /deps }
+      containers:
+        - name: orders-api
+          image: node:22-alpine
+          command: ["node", "/app/server.js"]
+          env:
+            - { name: PORT, value: "8080" }
+            - { name: PGHOST, value: "postgres.lab.svc.cluster.local" }
+            - { name: PGPORT, value: "5432" }
+            - { name: PG_POOL_MAX, value: "10" }
+            - { name: PGUSER, valueFrom: { secretKeyRef: { name: postgres-credentials, key: POSTGRES_USER } } }
+            - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: postgres-credentials, key: POSTGRES_PASSWORD } } }
+            - { name: PGDATABASE, valueFrom: { secretKeyRef: { name: postgres-credentials, key: POSTGRES_DB } } }
+            - { name: NODE_PATH, value: "/app/node_modules" }
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            - { name: src, mountPath: /app/server.js, subPath: server.js }
+            - { name: node-modules, mountPath: /app/node_modules }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-api
+  namespace: lab
+  labels:
+    app: orders-api
+spec:
+  selector:
+    app: orders-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: orders-api
+  namespace: lab
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: orders-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
